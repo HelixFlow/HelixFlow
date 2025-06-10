@@ -1,0 +1,13 @@
+fastapi==0.104.1
+pydantic==1.10.11
+orjson==3.9.14
+loguru
+PyMySQL==1.0.2
+SQLAlchemy==2.0.41
+sqlmodel==0.0.13
+uvicorn==0.22.0
+langgraph==0.2.3
+langchain==0.2.12
+langchain_community==0.2.11
+pytz==2024.1
+openai

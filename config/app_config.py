@@ -1,0 +1,15 @@
+import time, os
+
+APP_DEFAULT_TABLE_HOST = "localhost"
+APP_TABLE_HOST = os.environ.get("APP_TABLE_HOST", APP_DEFAULT_TABLE_HOST)
+APP_DEFAULT_TABLE_PORT = 3306
+APP_TABLE_PORT = os.environ.get("APP_TABLE_PORT", APP_DEFAULT_TABLE_PORT)
+APP_TABLE_USERNAME = 'root'
+APP_TABLE_USERNAME = os.environ.get("APP_TABLE_USERNAME", APP_TABLE_USERNAME)
+APP_TABLE_PASSWORD = '123123'
+APP_TABLE_PASSWORD = os.environ.get("APP_TABLE_PASSWORD", APP_TABLE_PASSWORD)
+
+APP_TABLE_URL="mysql+pymysql://"+APP_TABLE_USERNAME+":"+APP_TABLE_PASSWORD+"@"+APP_TABLE_HOST+":"+str(APP_TABLE_PORT)+"/helix"
+
+
+LOG_DEFAULT_FILE = f'helix_flow_{time.strftime("%Y%m%d", time.localtime(time.time()))}.log'
