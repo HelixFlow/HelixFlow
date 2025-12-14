@@ -17,7 +17,11 @@
 - [X] LLM
 - [X] if condition
 - [ ] MCP 
-- [ ] Retrieval (embeddings, vector store)
+- [x] Retrieval (embeddings, vector store)
+- [ ] Business understanding
+- [ ] Db agent
+- [ ] Flink SQL Generator
+- [ ] Flink Job Runner
 - [ ] Image Generation (Stable Diffusion ComfyUI)
 
 ## 🚀 Quick start
