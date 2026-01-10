@@ -16,3 +16,4 @@ bcrypt == 4.0.1
 grandalf==0.8
 pymilvus==2.6.3
 langchain-milvus==0.2.2
+tiktoken==0.7.0
