@@ -49,7 +49,12 @@ def client(app):
     """
     from fastapi.testclient import TestClient
 
-    with TestClient(app) as test_client:
+    # raise_server_exceptions=False mirrors real deployment behaviour: when a
+    # handler raises unexpectedly the client sees HTTP 500 instead of the
+    # exception being re-raised inside the test. This keeps tests that probe
+    # for "is this endpoint healthy yet?" meaningful — a broken endpoint
+    # should manifest as a 5xx, not as a pytest crash.
+    with TestClient(app, raise_server_exceptions=False) as test_client:
         yield test_client
 
 
