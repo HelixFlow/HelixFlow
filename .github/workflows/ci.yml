@@ -1,0 +1,147 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Lint — ruff (check + format dry-run). Runs first; gates the rest.
+  # ---------------------------------------------------------------------------
+  lint:
+    name: Lint (ruff)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      - name: Install ruff
+        run: pip install ruff==0.8.4
+      - name: ruff check
+        run: ruff check .
+      - name: ruff format --check (tests & scripts)
+        # Legacy runtime modules (core/ router/ service/ utils/) have a
+        # separate reformat pass scheduled for P0'-b; keeping the format
+        # check scoped to tests/ + scripts/ avoids blocking P0'-a on style
+        # churn outside the bug-fix surface.
+        run: ruff format --check tests scripts
+
+  # ---------------------------------------------------------------------------
+  # 2. Unit + api + smoke + concurrent + persistence (skeletons). No docker.
+  # ---------------------------------------------------------------------------
+  unit:
+    name: Unit / api / smoke / concurrent
+    runs-on: ubuntu-22.04
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      - name: Install deps
+        run: |
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run fast tests
+        env:
+          APP_TABLE_URL: "sqlite:///:memory:"
+        run: |
+          pytest tests/unit tests/api tests/smoke tests/concurrent tests/persistence \
+            -m "not integration" \
+            --snapshot-update=none \
+            -v
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # 3. Integration — brings up docker compose + pytest-docker. Slow & costly,
+  #    so only runs on push-to-main, nightly, or when a PR carries the
+  #    `run-integration` label. Unit must pass first.
+  # ---------------------------------------------------------------------------
+  integration:
+    name: Integration (docker compose)
+    runs-on: ubuntu-22.04
+    needs: unit
+    if: >-
+      github.event_name == 'push'
+      || github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'pull_request'
+          && contains(github.event.pull_request.labels.*.name, 'run-integration'))
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      - name: Install deps
+        run: pip install -r requirements.txt -r requirements-dev.txt
+      - name: Compose up --wait
+        run: docker compose up -d --wait --wait-timeout 180
+      - name: pytest integration
+        env:
+          APP_TABLE_URL: "sqlite:///:memory:"
+        run: pytest tests/integration -m integration -v
+      - name: Compose logs
+        if: always()
+        run: docker compose logs > docker-logs.txt || true
+      - name: Upload compose logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-logs
+          path: docker-logs.txt
+          if-no-files-found: warn
+      - name: Compose down -v
+        if: always()
+        run: docker compose down -v
+
+  # ---------------------------------------------------------------------------
+  # 4. Web audit — tmpfs clone of the web submodule + 6-dimension report.
+  #    continue-on-error so an unavailable HelixFlow-WEB repo never blocks CI.
+  # ---------------------------------------------------------------------------
+  web-audit:
+    name: Web submodule audit
+    runs-on: ubuntu-22.04
+    needs: lint
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Run audit script
+        env:
+          HELIXFLOW_AUDIT_OUT: ${{ github.workspace }}/_tmp_helixflow_web_audit.md
+        run: bash scripts/audit-web-submodule.sh
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-audit-report
+          path: ${{ github.workspace }}/_tmp_helixflow_web_audit.md
+          retention-days: 14
+          if-no-files-found: warn

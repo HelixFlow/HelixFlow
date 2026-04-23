@@ -1,0 +1,33 @@
+# serializer version: 1
+# name: test_get_operators_all_schema_snapshot
+  list([
+    dict({
+      'display_name': 'call_model',
+      'input_count': 1,
+      'name': 'call_model',
+      'output_count': 1,
+      'params_count': 4,
+    }),
+    dict({
+      'display_name': 'end',
+      'input_count': 0,
+      'name': 'end',
+      'output_count': 1,
+      'params_count': 0,
+    }),
+    dict({
+      'display_name': 'if_condition',
+      'input_count': 0,
+      'name': 'if_condition',
+      'output_count': 0,
+      'params_count': 2,
+    }),
+    dict({
+      'display_name': 'start',
+      'input_count': 1,
+      'name': 'start',
+      'output_count': 0,
+      'params_count': 0,
+    }),
+  ])
+# ---

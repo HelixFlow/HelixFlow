@@ -1,0 +1,140 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "helixflow"
+version = "0.1.0"
+description = "HelixFlow — a visual LangGraph agent builder"
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.10,<3.13"
+authors = [
+    {name = "Mango"},
+    {name = "begc"},
+    {name = "HelixFlow Contributors"},
+]
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS :: MacOS X",
+    "Framework :: FastAPI",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+    "Intended Audience :: Developers",
+]
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+]
+markers = [
+    "integration: requires docker compose (skipped in default unit run)",
+    "concurrent: concurrency / isolation regression tests",
+    "smoke: smoke-level sanity tests (fast, non-exhaustive)",
+    "persistence: LangGraph persistence-layer tests (skeleton; enabled in P0'-b)",
+]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--tb=short",
+    "--cov=core",
+    "--cov=router",
+    "--cov=service",
+    "--cov=utils",
+    "--cov-branch",
+    "--cov-report=term-missing",
+    "--cov-report=xml:coverage.xml",
+    # Coverage floor (T16). Measured on the P0'-a skeleton at 37% with only the
+    # sanity + health + B7 regression tests wired up; coder-1's T11-T13 regression
+    # suite pushes this higher. 30% is the RFC §8 hard gate.
+    "--cov-fail-under=30",
+]
+
+# ---------------------------------------------------------------------------
+# coverage
+# ---------------------------------------------------------------------------
+[tool.coverage.run]
+branch = true
+source = ["core", "router", "service", "utils"]
+omit = [
+    "tests/*",
+    "*/__init__.py",
+    "*/conftest.py",
+    "core/checkpoint/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+show_missing = true
+skip_empty = true
+
+[tool.coverage.xml]
+output = "coverage.xml"
+
+# ---------------------------------------------------------------------------
+# ruff
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = [
+    "web",
+    "docs",
+    ".venv",
+    "venv",
+    "build",
+    "dist",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # long lines (until codebase-wide cleanup in P0'-b)
+    "B008",  # FastAPI uses function calls in argument defaults (Depends, Query)
+    "B904",  # 'raise from' not always idiomatic in FastAPI handlers
+    "UP007", # typing.Optional / Union still preferred for sqlmodel compatibility
+    "UP006",
+    "UP035",
+    "UP038",
+    "I001",  # existing import order will be fixed as part of P0'-b cleanup
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["B", "E402"]
+"tests/_factories/*.py" = ["F401"]
+"__init__.py" = ["F401"]
+
+# Legacy runtime modules carry pre-existing style issues that are tracked as
+# part of the P0'-b cleanup sweep (see RFC §7.1 P0'-b). We relax these rules
+# for now so the P0'-a CI can pass while coder-1 focuses on the B1-B6 root
+# cause fixes rather than mass reformats.
+"core/**/*.py" = ["F401", "F403", "F405", "F811", "F841", "F541", "E401", "E711", "E722", "W292", "B009", "UP028"]
+"router/**/*.py" = ["F401", "F403", "F405", "F811", "F841", "F541", "E401", "E711", "E722", "W292", "B009", "UP028"]
+"service/**/*.py" = ["F401", "F403", "F405", "F811", "F841", "F541", "E401", "E711", "E722", "W292", "B009", "UP028"]
+"utils/**/*.py" = ["F401", "F403", "F405", "F811", "F841", "F541", "E401", "E711", "E722", "W292", "B009", "UP028"]
+"database/**/*.py" = ["F401", "F403", "F405", "F811", "F841", "F541", "E401", "E711", "E722", "W292", "B009", "UP028"]
+"config/**/*.py" = ["F401", "F403", "F405", "F811", "F841", "F541", "E401", "E711", "E722", "W292", "B009", "UP028"]
+"main.py" = ["F401", "F403", "F405", "F811", "F841", "F541", "E401", "E711", "E722", "W292", "B009", "UP028"]
