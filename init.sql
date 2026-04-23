@@ -1,7 +1,8 @@
-CREATE DATABASE `helix`;
+CREATE DATABASE IF NOT EXISTS `helix`;
+USE `helix`;
 -- helix.flow definition
 
-CREATE TABLE `flow` (
+CREATE TABLE IF NOT EXISTS `flow` (
   `id` varchar(100) NOT NULL,
   `data` text,
   `name` varchar(100) DEFAULT NULL,
@@ -16,7 +17,7 @@ CREATE TABLE `flow` (
 
 -- helix.`user` definition
 
-CREATE TABLE `user` (
+CREATE TABLE IF NOT EXISTS `user` (
   `id` int NOT NULL,
   `name` varchar(100) DEFAULT NULL,
   `password` varchar(100) DEFAULT NULL,

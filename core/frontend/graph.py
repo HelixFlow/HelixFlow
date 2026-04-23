@@ -1,9 +1,39 @@
-from typing import List, Dict, TypedDict
-from core.frontend.node import FrontendNode
-from core.frontend.edge import FrontendEdge
-from core.initial import NODE_FUNCTIONS, create_dynamic_state_graph
-from core.state import StateField, AppState
+from typing import Callable, Dict, List
+
 from langgraph.checkpoint.memory import InMemorySaver
+
+from core.frontend.edge import FrontendEdge
+from core.frontend.node import FrontendNode
+from core.initial import NODE_FUNCTIONS, create_dynamic_state_graph
+from core.state import AppState, StateField
+from utils.logger import logger
+
+
+def _warn_unsupported_and_fallback(name: str) -> InMemorySaver:
+    """Log a warning and fall back to InMemorySaver.
+
+    ``sqlite`` and ``postgres`` are reserved for P0'-b (RFC §7.1). Until their
+    real implementations land, callers that request them still receive an
+    in-memory checkpointer plus a warning log so tests/dev can keep running
+    without silently masking the upgrade.
+    """
+    logger.warning(
+        "checkpointer_type=%r is not implemented in P0'-a; "
+        "falling back to InMemorySaver. Scheduled for P0'-b.",
+        name,
+    )
+    return InMemorySaver()
+
+
+# Factory map: checkpointer_type -> zero-arg callable returning a saver
+# ``sqlite`` / ``postgres`` are stub entries that degrade to InMemorySaver.
+_CHECKPOINTER_FACTORY: Dict[str, Callable[[], object]] = {
+    'memory': lambda: InMemorySaver(),
+    'sqlite': lambda: _warn_unsupported_and_fallback('sqlite'),
+    'postgres': lambda: _warn_unsupported_and_fallback('postgres'),
+}
+
+
 class FrontendGraph:
 
     def __init__(self, nodes: List[FrontendNode],
@@ -21,19 +51,42 @@ class FrontendGraph:
         return self._edges
 
     def _build_graph(self) -> None:
-        """Builds the graph from the nodes and edges."""
+        """Build node/edge/config structures.
+
+        NOTE: We intentionally do NOT persist initial state here. Each request
+        must call :meth:`fresh_initial_state` to obtain an isolated copy
+        (B5 fix — no shared mutable state across concurrent requests).
+        """
         self.nodes = self._build_nodes()
         self.edges = self._build_edges()
-        self.state = self._build_states()
         self.config = self._build_node_params()
 
-    def compile_graph(self,checkpointer_type:str):
+    def compile_graph(self, checkpointer_type: str = 'memory'):
+        """Compile the StateGraph using the requested checkpointer.
+
+        Parameters
+        ----------
+        checkpointer_type:
+            One of ``memory`` / ``sqlite`` / ``postgres``. ``memory`` is the
+            only fully-implemented backend in P0'-a; the others degrade to an
+            in-memory saver with a warning.
+        """
         state_graph = create_dynamic_state_graph(self.nodes, self.edges, self._condition_edges)
-        checkpointer = InMemorySaver()
+        if checkpointer_type not in _CHECKPOINTER_FACTORY:
+            raise ValueError(
+                f"checkpointer_type={checkpointer_type!r} not supported in P0'-a"
+            )
+        checkpointer = _CHECKPOINTER_FACTORY[checkpointer_type]()
         return state_graph.compile(checkpointer=checkpointer)
 
+    def fresh_initial_state(self) -> AppState:
+        """Build a fresh per-request initial state (B5 fix).
 
-
+        Must be called for every incoming request; previously this was cached
+        on ``self.state`` and mutated across concurrent requests, causing
+        field bleed-through.
+        """
+        return self._build_states()
 
     @classmethod
     def from_payload(cls, payload: Dict) -> 'FrontendGraph':
@@ -86,8 +139,9 @@ class FrontendGraph:
         return edges
 
     def _build_states(self) -> AppState:
-        # Build the initial state of the graph
-        # 从节点的输入输出中提取参数，构建初始状态
+        # Build a fresh initial state from node input/output declarations.
+        # 从节点的输入输出中提取参数，构建初始状态。每次请求都重新构建，
+        # 不在 ``__init__`` 时持久化到 ``self``（B5 修复）。
         state: AppState = {"messages": [], "fields": {}}
         for node in self._nodes:
             if node.input is not None:
@@ -138,6 +192,13 @@ class FrontendGraph:
             if node.name == 'end':
                 return node
 
-def compile_graph(data: Dict) :
+
+def compile_graph(data: Dict, checkpointer_type: str = 'memory'):
+    """Module-level helper: build a graph from a payload and compile it.
+
+    The ``checkpointer_type`` default is ``'memory'`` so callers (and
+    router.flow_manage.update_flow's online-validation path) can invoke this
+    without supplying the argument — B1 fix.
+    """
     graph = FrontendGraph.from_payload(data)
-    return graph.compile_graph()
+    return graph.compile_graph(checkpointer_type)

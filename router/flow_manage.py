@@ -1,16 +1,17 @@
-import json
-from typing import List,Optional
+from typing import Optional
 from uuid import UUID, uuid4
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from router.base import FlowResponse,BaseResponse, CommonResponse
-from sqlmodel import Session, select, func
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlmodel import Session, func, select
+
+from core.frontend.graph import FrontendGraph, compile_graph
+from core.state import parse_end_node_to_output, parse_input_to_state
 from database.base import get_table_session
 from database.model.flow import Flow, FlowCreate, FlowUpdate
-from utils.logger import logger
-from utils.json_util import str_serialization, str_deserialization, json_serialization, json_deserialization
+from router.base import BaseResponse, CommonResponse, FlowResponse
 from utils.date_util import get_current_time_str
-from core.frontend.graph import FrontendGraph, compile_graph
-from core.state import parse_input_to_state, parse_end_node_to_output
+from utils.json_util import json_deserialization, json_serialization
+from utils.logger import logger
 
 
 
@@ -99,7 +100,7 @@ def update_flow(*,flow_id: UUID,
         try:
             graph_data = json_deserialization(db_flow.data)
             if graph_data.get('nodes') == []:
-                return FlowResponse(code=500, msg=f'Flow compile failed, nodes cannot be empty')
+                return FlowResponse(code=500, msg='Flow compile failed, nodes cannot be empty')
             compile_graph(data=graph_data)
         except Exception as exc:
             return FlowResponse(code=500, msg=f'Flow compile failed, {str(exc)}')
@@ -142,7 +143,10 @@ def process_flow(id: UUID,inputs: Optional[dict] = None,saver: Optional[str]="me
     print(state_graph.get_graph().print_ascii())
     req = uuid4()
     logger.info(f'Processing flow {id} with request id {req}')
-    state = graph.state
+    # B5 fix: obtain a fresh, per-request initial state rather than reusing
+    # ``graph.state`` (which was shared across concurrent requests and caused
+    # field bleed-through).
+    state = graph.fresh_initial_state()
 
     state = parse_input_to_state(inputs["inputs"], state, start_node=graph.get_start_node())
 
