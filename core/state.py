@@ -1,8 +1,11 @@
 import operator
-from pydantic import BaseModel
-from typing import Annotated, Sequence, TypedDict, Optional
+from typing import Annotated, Optional, Sequence, TypedDict
+
 from langchain_core.messages import BaseMessage
+from pydantic import BaseModel
+
 from core.frontend.node import StartNode
+
 
 class StateField(BaseModel):
     field_name: str
@@ -10,10 +13,33 @@ class StateField(BaseModel):
     field_relation: Optional[str] = None
     field_type: Optional[str] = 'str'
 
+
+def merge_fields(left: dict, right: dict) -> dict:
+    """Reducer for ``AppState.fields`` (B5 fix).
+
+    LangGraph applies reducers when a node returns a partial update: the new
+    dict is merged into the previous one rather than replacing it wholesale.
+    Semantics:
+
+    * ``None`` inputs are treated as empty dicts.
+    * Keys from ``right`` win over ``left`` (last-write-wins).
+    * Neither input is mutated.
+    """
+    if left is None and right is None:
+        return {}
+    if left is None:
+        return dict(right)
+    if right is None:
+        return dict(left)
+    return {**left, **right}
+
+
 class AppState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], operator.add]
-    fields: dict = {}
-
+    # B5: explicit reducer prevents partial updates from nuking unrelated keys
+    # and eliminates the cross-request state-pointer aliasing that caused
+    # field bleed-through under concurrent invocations.
+    fields: Annotated[dict, merge_fields]
 
 
 def parse_input_to_state(input: dict, state, start_node: StartNode) -> AppState:
@@ -25,6 +51,7 @@ def parse_input_to_state(input: dict, state, start_node: StartNode) -> AppState:
     for key, value in input.items():
         state['fields'][key] = StateField(field_name=key, field_value=value)
     return state
+
 
 def get_field_from_state(state: AppState, node_name: str) -> dict:
     # Get the fields from the state by the node name
@@ -43,6 +70,7 @@ def update_state_by_relation(state: AppState) -> AppState:
         if value.field_relation:
             state['fields'][key].field_value = state['fields'][value.field_relation].field_value
     return state
+
 
 def parse_end_node_to_output(state: AppState) -> dict:
     # Parse the end node to output
