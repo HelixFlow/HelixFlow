@@ -1,6 +1,6 @@
-from typing import List, Literal
+from typing import Literal
+
 from core.state import AppState
-from pydantic import BaseModel
 from utils.logger import logger
 
 def get_current_if_condition(config):
@@ -57,11 +57,14 @@ def if_condition(appstate:AppState, config) -> Literal:
                 logger.info(f"{param.value['reference']} : {variable} not in {compare}")
                 return condition['target']
         elif compare_eval == 'is empty':
-            if variable == '' or variable == None:
+            # "empty" means '' OR None — use OR (either triggers empty).
+            if variable == '' or variable is None:
                 logger.info(f"{param.value['reference']} : {variable} is empty")
                 return condition['target']
         elif compare_eval == 'is not empty':
-            if variable != '' or variable != None:
+            # "not empty" means NEITHER '' NOR None — both must be false (B3 fix).
+            # Previous `or` was always True; AND is the correct de Morgan dual.
+            if variable != '' and variable is not None:
                 logger.info(f"{param.value['reference']} : {variable} is not empty")
                 return condition['target']
 
