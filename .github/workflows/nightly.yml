@@ -1,0 +1,76 @@
+name: Nightly
+
+on:
+  schedule:
+    - cron: "0 18 * * *"   # 18:00 UTC daily
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  full-suite:
+    name: Full pipeline (lint + unit + integration + audit)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install deps
+        run: pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: |
+          ruff check .
+          ruff format --check tests scripts
+
+      - name: Unit / api / smoke / concurrent / persistence
+        env:
+          APP_TABLE_URL: "sqlite:///:memory:"
+        run: |
+          pytest tests/unit tests/api tests/smoke tests/concurrent tests/persistence \
+            -m "not integration" -v
+
+      - name: Compose up --wait
+        run: docker compose up -d --wait --wait-timeout 180
+
+      - name: Integration suite
+        env:
+          APP_TABLE_URL: "sqlite:///:memory:"
+        run: pytest tests/integration -m integration -v
+
+      - name: Compose logs
+        if: always()
+        run: docker compose logs > docker-logs.txt || true
+
+      - name: Compose down -v
+        if: always()
+        run: docker compose down -v
+
+      - name: Web submodule audit
+        env:
+          HELIXFLOW_AUDIT_OUT: ${{ github.workspace }}/_tmp_helixflow_web_audit.md
+        run: bash scripts/audit-web-submodule.sh || true
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-artifacts
+          path: |
+            coverage.xml
+            docker-logs.txt
+            _tmp_helixflow_web_audit.md
+          retention-days: 30
+          if-no-files-found: warn
