@@ -1,0 +1,12 @@
+# Optional dependencies — NOT required for the core P0'-a runtime.
+#
+# Retrieval (planned P3'; P0'-a ships placeholder skeletons only, see
+# RFC-2026-001 §3.3 B7 / 组会纪要 §3.2 B7). No module under
+# core/ router/ service/ utils/ imports `pymilvus` or `langchain_milvus`
+# at runtime; installing these packages is optional and only useful if you
+# plan to experiment with retrieval ahead of the P3' integration work.
+#
+# Install:  pip install -r requirements-optional.txt
+
+pymilvus==2.6.3
+langchain-milvus==0.2.2
