@@ -23,8 +23,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
-
 
 def test_node_functions_no_double_load():
     """Three assertions — see module docstring."""
