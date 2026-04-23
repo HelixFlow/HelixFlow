@@ -55,9 +55,10 @@ addopts = [
     "--cov-branch",
     "--cov-report=term-missing",
     "--cov-report=xml:coverage.xml",
-    # NOTE: --cov-fail-under=30 is enabled later in T16 once coverage is stable.
-    # For the pytest skeleton (T03) we deliberately omit the hard gate so
-    # coder-1 can iterate on tests without CI red-lights blocking progress.
+    # Coverage floor (T16). Measured on the P0'-a skeleton at 37% with only the
+    # sanity + health + B7 regression tests wired up; coder-1's T11-T13 regression
+    # suite pushes this higher. 30% is the RFC §8 hard gate.
+    "--cov-fail-under=30",
 ]
 
 # ---------------------------------------------------------------------------
