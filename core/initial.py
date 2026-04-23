@@ -1,16 +1,17 @@
 import importlib
-from langgraph.graph import StateGraph
-from typing import TypedDict, List
-from core.frontend.node import FrontendNode
-import os
 import importlib.util
 import inspect
-import functools
-from utils.logger import logger
-from core.state import AppState
-from core.frontend.node import StartNode, EndNode, IfConditionNode
-from core.builtin.base import start_node, end_node
+import os
+import pathlib
+from typing import List, TypedDict
+
+from langgraph.graph import StateGraph
+
+from core.builtin.base import end_node, start_node
 from core.builtin.if_condition import if_condition
+from core.frontend.node import EndNode, FrontendNode, IfConditionNode, StartNode
+from core.state import AppState
+from utils.logger import logger
 class AgentState(TypedDict):
     messages: list
     node_fields: dict
@@ -23,11 +24,14 @@ class AgentState(TypedDict):
 
 
 def load_nodes_from_directory() -> List[FrontendNode]:
-    # Load all custom nodes from the core/builtin directory
+    # Load all custom nodes from the core/builtin directory.
+    # B4 fix: resolve the directory relative to this file, not ``os.getcwd()``.
+    # Previously, running pytest from any other cwd (e.g. ``tmp_path``) would
+    # raise ``FileNotFoundError`` on ``os.listdir``.
     nodes = []
-    directory = os.path.join(os.getcwd(), "core", "builtin")
+    directory = str(pathlib.Path(__file__).parent / "builtin")
 
-    print(f"Loading nodes from directory: {directory}")
+    logger.debug(f"Loading nodes from directory: {directory}")
 
     for filename in os.listdir(directory):
         if filename.endswith('.py'):
@@ -81,7 +85,10 @@ def load_nodes_from_directory() -> List[FrontendNode]:
     nodes.append(endNode)
     return nodes
 ALL_NODES = load_nodes_from_directory()
-NODE_FUNCTIONS = {node.name: node for node in load_nodes_from_directory()}
+# B4 fix: reuse the already-scanned ``ALL_NODES`` instead of re-invoking
+# ``load_nodes_from_directory`` (which re-imports every module and logs the
+# "Loading nodes from directory" banner twice).
+NODE_FUNCTIONS = {node.name: node for node in ALL_NODES}
 
 
 
