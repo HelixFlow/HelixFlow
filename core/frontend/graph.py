@@ -1,4 +1,4 @@
-from typing import List, Dict, TypedDict
+from typing import List, Dict, Optional, TypedDict
 from core.frontend.node import FrontendNode
 from core.frontend.edge import FrontendEdge
 from core.initial import NODE_FUNCTIONS, create_dynamic_state_graph
@@ -27,10 +27,23 @@ class FrontendGraph:
         self.state = self._build_states()
         self.config = self._build_node_params()
 
-    def compile_graph(self,checkpointer_type:str):
+    def compile_graph(
+            self,
+            checkpointer_type: str = "memory",
+            checkpointer=None,
+            interrupt_before: Optional[List[str]] = None,
+            interrupt_after: Optional[List[str]] = None):
         state_graph = create_dynamic_state_graph(self.nodes, self.edges, self._condition_edges)
-        checkpointer = InMemorySaver()
-        return state_graph.compile(checkpointer=checkpointer)
+        graph_checkpointer = checkpointer or InMemorySaver()
+        compile_kwargs = {"checkpointer": graph_checkpointer}
+        if interrupt_before is not None:
+            compile_kwargs["interrupt_before"] = interrupt_before
+        if interrupt_after is not None:
+            compile_kwargs["interrupt_after"] = interrupt_after
+        return state_graph.compile(**compile_kwargs)
+
+    def get_interrupt_node_names(self) -> List[str]:
+        return list(self.nodes.keys())
 
 
 
@@ -140,4 +153,4 @@ class FrontendGraph:
 
 def compile_graph(data: Dict) :
     graph = FrontendGraph.from_payload(data)
-    return graph.compile_graph()
+    return graph.compile_graph(checkpointer_type="memory")

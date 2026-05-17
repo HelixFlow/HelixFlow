@@ -1,6 +1,5 @@
-from typing import List, Literal
+from typing import Literal
 from core.state import AppState
-from pydantic import BaseModel
 from utils.logger import logger
 
 def get_current_if_condition(config):
@@ -12,15 +11,17 @@ def if_condition(appstate:AppState, config) -> Literal:
     print("if_condition=-=-=-=")
 
     conditions = get_current_if_condition(config)
+    fallback_target = None
 
     for condition in conditions:
 
         param = condition['param']
         if param.name == 'else':
-            return condition['target']
-        variable = appstate['fields'][param.value['reference']]
+            fallback_target = condition['target']
+            continue
+        variable = appstate['fields'][param.value['reference']].field_value
         if param.value['compare_reference']:
-            compare = appstate['fields'][param.value['compare_value']]
+            compare = appstate['fields'][param.value['compare_value']].field_value
         else:
             compare = param.value['compare_value']
         compare_eval = param.value['compare']
@@ -61,8 +62,10 @@ def if_condition(appstate:AppState, config) -> Literal:
                 logger.info(f"{param.value['reference']} : {variable} is empty")
                 return condition['target']
         elif compare_eval == 'is not empty':
-            if variable != '' or variable != None:
+            if variable != '' and variable is not None:
                 logger.info(f"{param.value['reference']} : {variable} is not empty")
                 return condition['target']
 
-    return appstate
+    if fallback_target:
+        return fallback_target
+    raise ValueError("No condition matched and no else branch was configured")

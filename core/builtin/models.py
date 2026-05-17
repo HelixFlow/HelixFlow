@@ -29,7 +29,7 @@ def call_model(state: AppState, config):
                      openai_api_base=api_base)
 
     response = chat.invoke(prompts.format(**fields))
-    state['fields'][current_node+"/answer"].field_value = response
+    state['fields'][current_node+"/answer"].field_value = getattr(response, "content", response)
     update_state_by_relation(state)
 
     return state

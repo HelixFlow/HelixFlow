@@ -1,16 +1,16 @@
-import json
-from typing import List,Optional
-from uuid import UUID, uuid4
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from typing import Optional
+from uuid import UUID
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from router.base import FlowResponse,BaseResponse, CommonResponse
 from sqlmodel import Session, select, func
 from database.base import get_table_session
 from database.model.flow import Flow, FlowCreate, FlowUpdate
 from utils.logger import logger
-from utils.json_util import str_serialization, str_deserialization, json_serialization, json_deserialization
+from utils.json_util import json_serialization, json_deserialization
 from utils.date_util import get_current_time_str
-from core.frontend.graph import FrontendGraph, compile_graph
-from core.state import parse_input_to_state, parse_end_node_to_output
+from core.frontend.graph import compile_graph
+from service.flow_run_manager import flow_run_manager
 
 
 
@@ -20,21 +20,144 @@ from core.state import parse_input_to_state, parse_end_node_to_output
 router = APIRouter(prefix='/flows', tags=['Flows'])
 
 
+class FlowRunCreate(BaseModel):
+    id: UUID
+    inputs: Optional[dict] = None
+    saver: Optional[str] = "memory"
+
+
+class FlowRunPatch(BaseModel):
+    inputs: Optional[dict] = None
+    state: Optional[dict] = None
+    fields: Optional[dict] = None
+    config: Optional[dict] = None
+    configurable: Optional[dict] = None
+
+
+def _get_flow_graph_data(session: Session, flow_id: UUID):
+    flow = session.get(Flow, flow_id)
+    if not flow:
+        raise HTTPException(status_code=404, detail='Flow not found')
+    graph_data = json_deserialization(flow.data)
+    if not graph_data:
+        raise HTTPException(status_code=400, detail='Flow data is empty or invalid')
+    return graph_data
+
+
+def _flow_run_patch_to_dict(patch: FlowRunPatch):
+    return patch.dict(exclude_unset=True)
+
+
 @router.post('/', status_code=201)
 def create_flow(*,flow: FlowCreate,
                 session: Session = Depends(get_table_session)):
     """Create a new flow."""
-    db_flow = Flow(**flow.dict())
-    flow = session.query(Flow).filter(Flow.name == db_flow.name).first()
-    if flow:
-        return BaseResponse(code=500, msg='Flow name already exists')
-    db_flow.create_time = get_current_time_str()
-    db_flow.update_time = db_flow.create_time
-    db_flow.user_id = 1
-    session.add(db_flow)
-    session.commit()
-    session.refresh(db_flow)
-    return db_flow
+    try:
+        db_flow = Flow(**flow.dict())
+        existed_flow = session.query(Flow).filter(Flow.name == db_flow.name).first()
+        if existed_flow:
+            return CommonResponse(code=500, msg='Flow name already exists', data=None)
+        db_flow.create_time = get_current_time_str()
+        db_flow.update_time = db_flow.create_time
+        db_flow.user_id = 1
+        session.add(db_flow)
+        session.commit()
+        session.refresh(db_flow)
+        return CommonResponse(code=200, msg='success', data=db_flow)
+    except Exception as exc:
+        logger.exception(f'Create flow failed: {flow.dict()}')
+        return CommonResponse(code=500, msg=str(exc), data=None)
+
+
+@router.post('/runs', status_code=201)
+def create_flow_run(*, run: FlowRunCreate, session: Session = Depends(get_table_session)):
+    graph_data = _get_flow_graph_data(session, run.id)
+    try:
+        run_data = flow_run_manager.create_run(
+            flow_id=str(run.id),
+            graph_data=graph_data,
+            inputs=(run.inputs or {}).get("inputs", run.inputs or {}),
+        )
+        return CommonResponse(code=200, msg='success', data=run_data)
+    except Exception as exc:
+        logger.exception(f'Create flow run failed: {run.id}')
+        return CommonResponse(code=500, msg=str(exc), data=None)
+
+
+@router.get('/runs/{run_id}', status_code=200)
+def get_flow_run(*, run_id: str):
+    try:
+        return CommonResponse(code=200, msg='success', data=flow_run_manager.get_run(run_id))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        return CommonResponse(code=500, msg=str(exc), data=None)
+
+
+@router.post('/runs/{run_id}/pause', status_code=200)
+def pause_flow_run(*, run_id: str):
+    try:
+        return CommonResponse(code=200, msg='success', data=flow_run_manager.pause_run(run_id))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        return CommonResponse(code=500, msg=str(exc), data=None)
+
+
+@router.patch('/runs/{run_id}', status_code=200)
+def patch_flow_run(*, run_id: str, patch: FlowRunPatch):
+    try:
+        return CommonResponse(code=200, msg='success',
+                              data=flow_run_manager.patch_run(run_id, _flow_run_patch_to_dict(patch)))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        return CommonResponse(code=400, msg=str(exc), data=None)
+    except Exception as exc:
+        return CommonResponse(code=500, msg=str(exc), data=None)
+
+
+@router.post('/runs/{run_id}/resume', status_code=200)
+def resume_flow_run(*, run_id: str, patch: Optional[FlowRunPatch] = None):
+    try:
+        patch_data = _flow_run_patch_to_dict(patch) if patch else None
+        return CommonResponse(code=200, msg='success',
+                              data=flow_run_manager.resume_run(run_id, patch_data))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        return CommonResponse(code=400, msg=str(exc), data=None)
+    except Exception as exc:
+        return CommonResponse(code=500, msg=str(exc), data=None)
+
+
+@router.post('/runs/{run_id}/stop', status_code=200)
+def stop_flow_run(*, run_id: str):
+    try:
+        return CommonResponse(code=200, msg='success', data=flow_run_manager.stop_run(run_id))
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        return CommonResponse(code=500, msg=str(exc), data=None)
+
+
+@router.post('/process', status_code=200)
+def process_flow(id: UUID,inputs: Optional[dict] = None,saver: Optional[str]="memory",
+                 session: Session = Depends(get_table_session)):
+    data = _get_flow_graph_data(session, id)
+    logger.info(f'Processing flow {id}')
+    try:
+        result = flow_run_manager.run_process_compat(
+            flow_id=str(id),
+            graph_data=data,
+            inputs=(inputs or {}).get("inputs", inputs or {}),
+        )
+        return CommonResponse(code=200, msg='success', data=result)
+    except Exception as exc:
+        logger.exception(f'Processing flow {id} failed')
+        return CommonResponse(code=500, msg=str(exc), data=None)
+
+
 @router.get('/{flow_id}', status_code=200)
 def read_flow(*,flow_id: UUID, session: Session = Depends(get_table_session)):
     """Read a flow."""
@@ -131,27 +254,3 @@ def delete_flow(*,
     session.delete(flow)
     session.commit()
     return {'message': 'Flow deleted successfully'}
-
-
-@router.post('/process', status_code=200)
-def process_flow(id: UUID,inputs: Optional[dict] = None,saver: Optional[str]="memory",
-                 session: Session = Depends(get_table_session)):
-    data = json_deserialization(session.get(Flow, id).data)
-    graph = FrontendGraph.from_payload(data)
-    state_graph = graph.compile_graph(checkpointer_type=saver)
-    print(state_graph.get_graph().print_ascii())
-    req = uuid4()
-    logger.info(f'Processing flow {id} with request id {req}')
-    state = graph.state
-
-    state = parse_input_to_state(inputs["inputs"], state, start_node=graph.get_start_node())
-
-    config = graph.config
-    config["configurable"]["thread_id"] = str(req)
-    result = state_graph.invoke(input=state, config=config)
-    result = parse_end_node_to_output(result)
-
-    return CommonResponse(code=200, msg='success', data=result)
-
-
-

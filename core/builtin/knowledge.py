@@ -319,13 +319,15 @@ def search_milvus(
         score = 0.0
         if distance is not None:
             if metric_type.upper() == "COSINE":
-                score = 1.0 - distance
+                # score = 1.0 - distance
+                score = distance
             elif metric_type.upper() == "L2":
                 score = 1.0 / (1.0 + distance)
 
         normalized.append({"text": content, "metadata": {}, "score": score})
-        log(f"search_milvus: normalize[{idx}] content_len={len(content)}, distance={distance}, score={score:.4f}")
 
+        log(f"search_milvus: normalize[{idx}] content_len={len(content)}, distance={distance}, score={score:.4f}")
+    normalized.sort(key=lambda x: x["score"], reverse = True)
     log(f"search_milvus: done, normalized_len={len(normalized)}, total_elapsed_ms={(time.time() - t0)*1000:.2f}")
     return normalized
 
