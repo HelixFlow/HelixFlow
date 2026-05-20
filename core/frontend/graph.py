@@ -43,7 +43,11 @@ class FrontendGraph:
         return state_graph.compile(**compile_kwargs)
 
     def get_interrupt_node_names(self) -> List[str]:
-        return list(self.nodes.keys())
+        end_node = self.get_end_node()
+        end_names = {"end"}
+        if end_node:
+            end_names.update({end_node.name, end_node.display_name})
+        return [node_name for node_name in self.nodes.keys() if node_name not in end_names]
 
 
 
