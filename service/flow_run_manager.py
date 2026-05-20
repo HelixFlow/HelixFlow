@@ -1,4 +1,5 @@
 import copy
+import re
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -19,6 +20,7 @@ FAILED = "failed"
 
 
 TERMINAL_STATUSES = {COMPLETED, STOPPED, FAILED}
+LANGGRAPH_TASK_NAME_PATTERN = re.compile(r"During task with name ['\"]([^'\"]+)['\"]")
 
 
 def _now_iso() -> str:
@@ -42,6 +44,9 @@ class FlowRun:
     current_state: Optional[Dict[str, Any]] = None
     current_checkpoint_config: Optional[Dict[str, Any]] = None
     next_nodes: list = field(default_factory=list)
+    active_nodes: list = field(default_factory=list)
+    failed_node: Optional[str] = None
+    error_type: Optional[str] = None
     started_at: str = field(default_factory=_now_iso)
     updated_at: str = field(default_factory=_now_iso)
     finished_at: Optional[str] = None
@@ -179,14 +184,19 @@ class FlowRunManager:
         try:
             current_input = graph_input
             while True:
+                with run.lock:
+                    self._refresh_state(run)
+                    run.active_nodes = list(run.next_nodes)
                 result = run.state_graph.invoke(input=current_input, config=run.config)
                 with run.lock:
                     if run.status == STOPPED:
                         self._refresh_state(run)
+                        run.active_nodes = []
                         return
 
                     self._refresh_state(run)
                     if run.next_nodes:
+                        run.active_nodes = []
                         self._add_event(run, "checkpoint", "Reached node boundary", {"next_nodes": run.next_nodes})
                         if run.pause_requested:
                             run.pause_requested = False
@@ -199,6 +209,7 @@ class FlowRunManager:
                     run.current_state = result
                     run.result = parse_end_node_to_output(result)
                     run.status = COMPLETED
+                    run.active_nodes = []
                     run.finished_at = run.finished_at or _now_iso()
                     self._add_event(run, "completed", "Run completed", {"result": run.result})
                     return
@@ -206,10 +217,19 @@ class FlowRunManager:
             logger.exception(f"Flow run {run_id} failed")
             with run.lock:
                 if run.status != STOPPED:
+                    self._refresh_state(run)
                     run.status = FAILED
+                    run.failed_node = self._infer_failed_node(exc, run)
+                    run.error_type = type(exc).__name__
                     run.error = str(exc)
+                    run.active_nodes = []
                     run.finished_at = run.finished_at or _now_iso()
-                    self._add_event(run, "failed", "Run failed", {"error": run.error})
+                    self._add_event(run, "failed", "Run failed", {
+                        "node": run.failed_node,
+                        "error_type": run.error_type,
+                        "error": run.error,
+                        "next_nodes": run.next_nodes,
+                    })
 
     def _apply_pending_patch(self, run: FlowRun):
         if not run.pending_patch:
@@ -321,11 +341,40 @@ class FlowRunManager:
                 "state": self._jsonable_state(run.current_state),
                 "configurable": self._jsonable_state(run.config.get("configurable", {})),
                 "next_nodes": run.next_nodes,
+                "active_nodes": run.active_nodes,
+                "failed_node": run.failed_node,
                 "result": self._jsonable_state(run.result),
                 "error": run.error,
+                "error_type": run.error_type,
                 "pending_patch": self._jsonable_state(run.pending_patch),
                 "events": self._jsonable_state(run.events),
             }
+
+    def _infer_failed_node(self, exc: Exception, run: FlowRun) -> Optional[str]:
+        for text in self._iter_exception_text(exc):
+            match = LANGGRAPH_TASK_NAME_PATTERN.search(text)
+            if match:
+                return match.group(1)
+        if run.active_nodes:
+            return run.active_nodes[0]
+        if run.next_nodes:
+            return run.next_nodes[0]
+        return None
+
+    def _iter_exception_text(self, exc: Exception):
+        seen = set()
+        stack = [exc]
+        while stack:
+            current = stack.pop()
+            if current is None or id(current) in seen:
+                continue
+            seen.add(id(current))
+            yield str(current)
+            yield repr(current)
+            for note in getattr(current, "__notes__", []) or []:
+                yield str(note)
+            stack.append(getattr(current, "__cause__", None))
+            stack.append(getattr(current, "__context__", None))
 
     def _jsonable_state(self, value: Any):
         if isinstance(value, dict):

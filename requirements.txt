@@ -4,6 +4,7 @@ pydantic==2.7.4
 orjson==3.10.18
 loguru
 PyMySQL==1.0.2
+cryptography
 SQLAlchemy==2.0.41
 sqlmodel==0.0.27
 uvicorn==0.22.0
