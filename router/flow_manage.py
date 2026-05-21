@@ -18,6 +18,8 @@ from service.flow_run_manager import flow_run_manager
 
 
 router = APIRouter(prefix='/flows', tags=['Flows'])
+MASKED_SECRET = "********"
+SECRET_KEYWORDS = ("api_key", "apikey", "access_key", "secret", "token", "password", "authorization")
 
 
 class FlowRunCreate(BaseModel):
@@ -48,12 +50,41 @@ def _flow_run_patch_to_dict(patch: FlowRunPatch):
     return patch.dict(exclude_unset=True)
 
 
+def _serialize_flow_create_data(flow_data: dict) -> tuple[dict, dict]:
+    response_data = flow_data.get('data')
+    db_data = dict(flow_data)
+    if response_data:
+        db_data['data'] = json_serialization(response_data)
+    return db_data, response_data or {}
+
+
+def _mask_sensitive_payload(value):
+    if isinstance(value, dict):
+        masked = {}
+        named_secret = any(
+            secret in str(value.get(name_key, "")).lower()
+            for secret in SECRET_KEYWORDS
+            for name_key in ("name", "display_name")
+        )
+        for key, item in value.items():
+            key_text = str(key).lower()
+            if any(secret in key_text for secret in SECRET_KEYWORDS) or (named_secret and key_text == "value"):
+                masked[key] = MASKED_SECRET if item else item
+            else:
+                masked[key] = _mask_sensitive_payload(item)
+        return masked
+    if isinstance(value, list):
+        return [_mask_sensitive_payload(item) for item in value]
+    return value
+
+
 @router.post('/', status_code=201)
 def create_flow(*,flow: FlowCreate,
                 session: Session = Depends(get_table_session)):
     """Create a new flow."""
     try:
-        db_flow = Flow(**flow.dict())
+        db_data, response_data = _serialize_flow_create_data(flow.dict())
+        db_flow = Flow(**db_data)
         existed_flow = session.query(Flow).filter(Flow.name == db_flow.name).first()
         if existed_flow:
             return CommonResponse(code=500, msg='Flow name already exists', data=None)
@@ -63,9 +94,12 @@ def create_flow(*,flow: FlowCreate,
         session.add(db_flow)
         session.commit()
         session.refresh(db_flow)
-        return CommonResponse(code=200, msg='success', data=db_flow)
+        result = db_flow.dict()
+        result['data'] = response_data
+        return CommonResponse(code=200, msg='success', data=result)
     except Exception as exc:
-        logger.exception(f'Create flow failed: {flow.dict()}')
+        logger.exception(f'Create flow failed: {_mask_sensitive_payload(flow.dict())}')
+        session.rollback()
         return CommonResponse(code=500, msg=str(exc), data=None)
 
 

@@ -12,4 +12,4 @@ parser.add_argument("--database-url", type=str, default=APP_TABLE_URL, help='默
 
 
 
-args = parser.parse_args()
+args, _unknown_args = parser.parse_known_args()
