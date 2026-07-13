@@ -9,6 +9,13 @@
       'params_count': 4,
     }),
     dict({
+      'display_name': 'draw_image',
+      'input_count': 1,
+      'name': 'draw_image',
+      'output_count': 1,
+      'params_count': 8,
+    }),
+    dict({
       'display_name': 'end',
       'input_count': 0,
       'name': 'end',
@@ -21,6 +28,13 @@
       'name': 'if_condition',
       'output_count': 0,
       'params_count': 2,
+    }),
+    dict({
+      'display_name': 'knowledge',
+      'input_count': 1,
+      'name': 'knowledge',
+      'output_count': 1,
+      'params_count': 7,
     }),
     dict({
       'display_name': 'start',

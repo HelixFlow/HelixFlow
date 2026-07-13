@@ -1,15 +1,10 @@
-# HelixFlow core runtime dependencies.
-#
-# Optional dependencies (e.g. retrieval-stack: pymilvus / langchain-milvus)
-# live in requirements-optional.txt — see that file and the "Known
-# Limitations (P0'-a)" section in README.md for context (RFC-2026-001 §3.3 B7).
-
 fastapi==0.104.1
 fastapi-jwt-auth2==0.5.0
 pydantic==2.7.4
 orjson==3.10.18
 loguru
 PyMySQL==1.0.2
+cryptography
 SQLAlchemy==2.0.41
 sqlmodel==0.0.27
 uvicorn==0.22.0
@@ -20,3 +15,6 @@ pytz==2024.1
 openai
 bcrypt == 4.0.1
 grandalf==0.8
+pymilvus==2.6.3
+langchain-milvus==0.2.2
+tiktoken==0.7.0

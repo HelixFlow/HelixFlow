@@ -1,4 +1,4 @@
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Optional
 
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -53,31 +53,57 @@ class FrontendGraph:
     def _build_graph(self) -> None:
         """Build node/edge/config structures.
 
-        NOTE: We intentionally do NOT persist initial state here. Each request
-        must call :meth:`fresh_initial_state` to obtain an isolated copy
-        (B5 fix — no shared mutable state across concurrent requests).
+        NOTE: ``self.state`` is a template only. Request paths must not mutate
+        it directly — take a fresh copy via :meth:`fresh_initial_state` or
+        ``copy.deepcopy`` (B5 fix — no shared mutable state across concurrent
+        requests; ``service.flow_run_manager`` deep-copies it per run).
         """
         self.nodes = self._build_nodes()
         self.edges = self._build_edges()
+        self.state = self._build_states()
         self.config = self._build_node_params()
 
-    def compile_graph(self, checkpointer_type: str = 'memory'):
-        """Compile the StateGraph using the requested checkpointer.
+    def compile_graph(
+            self,
+            checkpointer_type: str = 'memory',
+            checkpointer=None,
+            interrupt_before: Optional[List[str]] = None,
+            interrupt_after: Optional[List[str]] = None):
+        """Compile the StateGraph.
 
         Parameters
         ----------
         checkpointer_type:
             One of ``memory`` / ``sqlite`` / ``postgres``. ``memory`` is the
             only fully-implemented backend in P0'-a; the others degrade to an
-            in-memory saver with a warning.
+            in-memory saver with a warning. Ignored when ``checkpointer`` is
+            passed explicitly.
+        checkpointer:
+            An already-constructed checkpointer instance (used by
+            ``service.flow_run_manager`` to share a saver across pause/resume).
+        interrupt_before / interrupt_after:
+            Forwarded to ``StateGraph.compile`` for node-level breakpoints.
         """
         state_graph = create_dynamic_state_graph(self.nodes, self.edges, self._condition_edges)
-        if checkpointer_type not in _CHECKPOINTER_FACTORY:
-            raise ValueError(
-                f"checkpointer_type={checkpointer_type!r} not supported in P0'-a"
-            )
-        checkpointer = _CHECKPOINTER_FACTORY[checkpointer_type]()
-        return state_graph.compile(checkpointer=checkpointer)
+        if checkpointer is None:
+            if checkpointer_type not in _CHECKPOINTER_FACTORY:
+                raise ValueError(
+                    f"checkpointer_type={checkpointer_type!r} not supported in P0'-a"
+                )
+            checkpointer = _CHECKPOINTER_FACTORY[checkpointer_type]()
+        compile_kwargs = {"checkpointer": checkpointer}
+        if interrupt_before is not None:
+            compile_kwargs["interrupt_before"] = interrupt_before
+        if interrupt_after is not None:
+            compile_kwargs["interrupt_after"] = interrupt_after
+        return state_graph.compile(**compile_kwargs)
+
+    def get_interrupt_node_names(self) -> List[str]:
+        end_node = self.get_end_node()
+        end_names = {"end"}
+        if end_node:
+            end_names.update({end_node.name, end_node.display_name})
+        return [node_name for node_name in self.nodes.keys() if node_name not in end_names]
 
     def fresh_initial_state(self) -> AppState:
         """Build a fresh per-request initial state (B5 fix).

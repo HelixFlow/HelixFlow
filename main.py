@@ -1,8 +1,13 @@
+import langchain as _lc
+
+# 兼容补丁：为当前 langchain 版本提供缺失的 debug 属性，防止崩溃
+if not hasattr(_lc, "debug"):
+    _lc.debug = False
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from config.arg_settings import args
 from router.route import router
-
 
 
 def create_app():
