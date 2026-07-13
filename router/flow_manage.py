@@ -1,6 +1,8 @@
+import json
 from typing import Optional
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from router.base import FlowResponse,BaseResponse, CommonResponse
 from sqlmodel import Session, select, func
@@ -175,17 +177,49 @@ def stop_flow_run(*, run_id: str):
         return CommonResponse(code=500, msg=str(exc), data=None)
 
 
+def _sse_frame(event: str, data) -> str:
+    # 注意不能用 utils.json_util.json_serialization（它做 base64 编码，是给
+    # flow.data 落库用的）；SSE data 必须是明文 JSON。
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
+
+
 @router.post('/process', status_code=200)
-def process_flow(id: UUID,inputs: Optional[dict] = None,saver: Optional[str]="memory",
+def process_flow(id: UUID, inputs: Optional[dict] = None, saver: Optional[str] = "memory",
+                 conversation_id: Optional[str] = None, stream: bool = False,
+                 recursion_limit: Optional[int] = None,
                  session: Session = Depends(get_table_session)):
+    """Run a flow synchronously.
+
+    - ``conversation_id``: reuse the same LangGraph thread across calls for
+      multi-turn memory (combine with ``saver=sqlite`` to survive restarts).
+    - ``stream=true``: return an SSE stream (start → node* → end).
+    - ``recursion_limit``: raise LangGraph's step budget for looping flows.
+    """
     data = _get_flow_graph_data(session, id)
-    logger.info(f'Processing flow {id}')
+    request_inputs = (inputs or {}).get("inputs", inputs or {})
+    logger.info(f'Processing flow {id} (conversation_id={conversation_id}, stream={stream})')
+
+    if stream:
+        def event_stream():
+            for event, payload in flow_run_manager.stream_sync(
+                    flow_id=str(id), graph_data=data, inputs=request_inputs,
+                    thread_id=conversation_id, checkpointer_type=saver or "memory",
+                    recursion_limit=recursion_limit):
+                yield _sse_frame(event, payload)
+        return StreamingResponse(event_stream(), media_type='text/event-stream')
+
     try:
-        result = flow_run_manager.run_process_compat(
-            flow_id=str(id),
-            graph_data=data,
-            inputs=(inputs or {}).get("inputs", inputs or {}),
-        )
+        if conversation_id or (saver and saver != "memory") or recursion_limit:
+            result = flow_run_manager.run_sync(
+                flow_id=str(id), graph_data=data, inputs=request_inputs,
+                thread_id=conversation_id, checkpointer_type=saver or "memory",
+                recursion_limit=recursion_limit)
+        else:
+            result = flow_run_manager.run_process_compat(
+                flow_id=str(id),
+                graph_data=data,
+                inputs=request_inputs,
+            )
         return CommonResponse(code=200, msg='success', data=result)
     except Exception as exc:
         logger.exception(f'Processing flow {id} failed')

@@ -1,7 +1,7 @@
-import operator
 from typing import Annotated, Any, Optional, Sequence, TypedDict
 
 from langchain_core.messages import BaseMessage
+from langgraph.graph.message import add_messages
 from pydantic import BaseModel
 
 from core.frontend.node import StartNode
@@ -35,7 +35,10 @@ def merge_fields(left: dict, right: dict) -> dict:
 
 
 class AppState(TypedDict):
-    messages: Annotated[Sequence[BaseMessage], operator.add]
+    # ``add_messages`` merges by message id, so nodes that return the full
+    # state (the prevailing convention in core/builtin) don't double-append
+    # history — only messages with new ids are added.
+    messages: Annotated[Sequence[BaseMessage], add_messages]
     # B5: explicit reducer prevents partial updates from nuking unrelated keys
     # and eliminates the cross-request state-pointer aliasing that caused
     # field bleed-through under concurrent invocations.

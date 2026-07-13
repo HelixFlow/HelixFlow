@@ -17,6 +17,31 @@ HelixFlow 是一个面向数据工程师和 AI 应用开发者的可视化 Agent
 - FlinkSQL 生成：按知识库召回的 Kafka、upsert-kafka、Hudi、Hive 模板生成建表 SQL 和 INSERT SQL。
 - 工程控制台 UI：包含工作流画布、节点库、配置面板、执行日志、SQL 预览和风险检查。
 
+## Agent 能力
+
+在固定 workflow 之上，引擎补齐了通用 Agent 原语：
+
+- **工具调用（ReAct）**：内置 `agent` 节点，通过 `bind_tools` 把注册工具交给 LLM，
+  在节点内执行「模型 → tool_calls → 工具结果 → 模型」循环（`max_iterations` 兜底防死循环）。
+  工具注册在 `core/tools/`（内置 calculator / current_time / http_get / json_extract），
+  `GET /helixflow/tools/` 列出可用工具。
+- **循环与并行分支**：边结构支持一个节点多条出边（fan-out 并行），if_condition 的
+  分支可以指回上游节点构成环（reflection / retry / 多轮检索）；
+  `/flows/process` 的 `recursion_limit` 参数可放宽 LangGraph 步数预算。
+- **多轮对话记忆**：`AppState.messages` 走 `add_messages` reducer，`call_model` / `agent`
+  节点开启 `memory` 参数后携带会话历史；`/flows/process` 传 `conversation_id`
+  复用同一 LangGraph thread，跨请求延续记忆。
+- **持久化 checkpoint**：`saver=sqlite` 使用 SqliteSaver（路径由 `HELIXFLOW_CHECKPOINT_DB`
+  控制，默认 `data/checkpoints.db`），进程重启后会话可恢复；`postgres` 计划中。
+- **流式输出（SSE）**：`POST /flows/process?stream=true` 返回 `text/event-stream`，
+  事件序列为 `start → node* → end`（失败时以 `error` 结束）。
+
+```bash
+# 多轮对话 + 持久化 + 流式
+curl -N -X POST 'http://localhost:11110/helixflow/flows/process?id=<flow_id>&stream=true&conversation_id=conv-1&saver=sqlite' \
+  -H 'Content-Type: application/json' -d '{"inputs": {"question": "今天几号？"}}'
+```
+
 ## 适用场景
 
 - 快速搭建和调试基于 RAG 的 Agent 工作流。

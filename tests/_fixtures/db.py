@@ -27,11 +27,15 @@ def db_engine():
         poolclass=StaticPool,
     )
 
-    # Ensure all sqlmodel-declared tables are present.
-    try:
-        import database.model  # noqa: F401 — registers tables with SQLModel.metadata
-    except Exception:  # pragma: no cover — in case imports are partial
-        pass
+    # Ensure all sqlmodel-declared tables are present. ``database.model`` is an
+    # empty package, so import the concrete model modules — otherwise table
+    # registration silently depends on some other test importing them first.
+    for module in ("database.model.flow", "database.model.user",
+                   "database.model.business_analysis"):
+        try:
+            __import__(module)
+        except Exception:  # pragma: no cover — in case imports are partial
+            pass
 
     SQLModel.metadata.create_all(engine)
     yield engine

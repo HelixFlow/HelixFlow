@@ -1,3 +1,6 @@
+import os
+import sqlite3
+import threading
 from typing import Callable, Dict, List, Optional
 
 from langgraph.checkpoint.memory import InMemorySaver
@@ -12,24 +15,48 @@ from utils.logger import logger
 def _warn_unsupported_and_fallback(name: str) -> InMemorySaver:
     """Log a warning and fall back to InMemorySaver.
 
-    ``sqlite`` and ``postgres`` are reserved for P0'-b (RFC §7.1). Until their
-    real implementations land, callers that request them still receive an
-    in-memory checkpointer plus a warning log so tests/dev can keep running
-    without silently masking the upgrade.
+    ``postgres`` is reserved for P0'-b (RFC §7.1). Until the real
+    implementation lands, callers that request it still receive an in-memory
+    checkpointer plus a warning log so tests/dev can keep running without
+    silently masking the upgrade.
     """
     logger.warning(
-        "checkpointer_type=%r is not implemented in P0'-a; "
+        "checkpointer_type=%r is not implemented yet; "
         "falling back to InMemorySaver. Scheduled for P0'-b.",
         name,
     )
     return InMemorySaver()
 
 
-# Factory map: checkpointer_type -> zero-arg callable returning a saver
-# ``sqlite`` / ``postgres`` are stub entries that degrade to InMemorySaver.
+_sqlite_saver = None
+_sqlite_saver_lock = threading.Lock()
+
+
+def get_sqlite_saver():
+    """Process-wide durable SqliteSaver (survives restarts, unlike memory).
+
+    DB path comes from ``HELIXFLOW_CHECKPOINT_DB`` (default
+    ``data/checkpoints.db``). A single shared connection with
+    ``check_same_thread=False`` — SqliteSaver serializes access internally.
+    """
+    global _sqlite_saver
+    with _sqlite_saver_lock:
+        if _sqlite_saver is None:
+            from langgraph.checkpoint.sqlite import SqliteSaver
+            db_path = os.getenv('HELIXFLOW_CHECKPOINT_DB', os.path.join('data', 'checkpoints.db'))
+            directory = os.path.dirname(db_path)
+            if directory:
+                os.makedirs(directory, exist_ok=True)
+            connection = sqlite3.connect(db_path, check_same_thread=False)
+            _sqlite_saver = SqliteSaver(connection)
+        return _sqlite_saver
+
+
+# Factory map: checkpointer_type -> zero-arg callable returning a saver.
+# ``postgres`` is a stub entry that degrades to InMemorySaver.
 _CHECKPOINTER_FACTORY: Dict[str, Callable[[], object]] = {
     'memory': lambda: InMemorySaver(),
-    'sqlite': lambda: _warn_unsupported_and_fallback('sqlite'),
+    'sqlite': get_sqlite_saver,
     'postgres': lambda: _warn_unsupported_and_fallback('postgres'),
 }
 
@@ -74,10 +101,10 @@ class FrontendGraph:
         Parameters
         ----------
         checkpointer_type:
-            One of ``memory`` / ``sqlite`` / ``postgres``. ``memory`` is the
-            only fully-implemented backend in P0'-a; the others degrade to an
-            in-memory saver with a warning. Ignored when ``checkpointer`` is
-            passed explicitly.
+            One of ``memory`` / ``sqlite`` / ``postgres``. ``memory`` and
+            ``sqlite`` (durable, see :func:`get_sqlite_saver`) are fully
+            implemented; ``postgres`` degrades to an in-memory saver with a
+            warning. Ignored when ``checkpointer`` is passed explicitly.
         checkpointer:
             An already-constructed checkpointer instance (used by
             ``service.flow_run_manager`` to share a saver across pause/resume).
@@ -153,6 +180,8 @@ class FrontendGraph:
         return nodes
 
     def _build_edges(self):
+        # source -> [targets]。多目标支持 fan-out 并行分支；配合 if_condition
+        # 的回边可以表达循环（reflection / retry / 多轮检索）。
         edges: dict = {}
         for edge in self._edges:
             if 'if_condition' in edge.source:
@@ -161,7 +190,7 @@ class FrontendGraph:
                     if condition['param'].name == edge.sourceHandle:
                         condition['target'] = edge.target
             else:
-                edges[edge.source] = edge.target
+                edges.setdefault(edge.source, []).append(edge.target)
         return edges
 
     def _build_states(self) -> AppState:

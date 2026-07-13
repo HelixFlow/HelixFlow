@@ -101,15 +101,21 @@ def create_dynamic_state_graph(node_functions: dict, edges: dict, condition_edge
         logger.debug(f"Adding node {node_name} to state graph")
         state_graph.add_node(node_name, node_function)
 
-    # Add edges to define transitions between nodes
-    for from_node, to_node in edges.items():
+    # Add edges to define transitions between nodes.
+    # ``edges`` values are lists of targets: multiple plain targets fan out in
+    # parallel; an if_condition target attaches a conditional router whose
+    # path_map may point backwards (loops).
+    for from_node, targets in edges.items():
         if 'if_condition' in from_node:
             continue
-        if 'if_condition' in to_node:
-            condition_source[to_node] = from_node
-            continue
-        logger.debug(f"Adding edge from {from_node} to {to_node}")
-        state_graph.add_edge(from_node, to_node)
+        if isinstance(targets, str):
+            targets = [targets]
+        for to_node in targets:
+            if 'if_condition' in to_node:
+                condition_source[to_node] = from_node
+                continue
+            logger.debug(f"Adding edge from {from_node} to {to_node}")
+            state_graph.add_edge(from_node, to_node)
     for node, conditions in condition_edge.items():
         path_map = {}
         for condition in conditions:

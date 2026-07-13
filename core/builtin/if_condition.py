@@ -5,8 +5,19 @@ from utils.logger import logger
 
 def get_current_if_condition(config):
     source_name = config['metadata']['langgraph_node']
-    current_condition = config['configurable']['_edges'][source_name]
-    return config['configurable'][current_condition]
+    targets = config['configurable']['_edges'][source_name]
+    # ``_edges`` values are lists of targets (multi-target edges); pick the
+    # if_condition node among them. A plain string is kept for backwards
+    # compatibility with pre-multi-edge payloads, and a single target is used
+    # as-is regardless of its name (conditional nodes may be named freely).
+    if isinstance(targets, str):
+        targets = [targets]
+    if len(targets) == 1:
+        return config['configurable'][targets[0]]
+    for target in targets:
+        if 'if_condition' in target:
+            return config['configurable'][target]
+    raise ValueError(f"No if_condition target found on edges of {source_name!r}")
 
 def if_condition(appstate:AppState, config) -> Literal:
     print("if_condition=-=-=-=")

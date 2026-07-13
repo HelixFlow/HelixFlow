@@ -2,11 +2,18 @@
 # name: test_get_operators_all_schema_snapshot
   list([
     dict({
+      'display_name': 'agent',
+      'input_count': 1,
+      'name': 'agent',
+      'output_count': 1,
+      'params_count': 7,
+    }),
+    dict({
       'display_name': 'call_model',
       'input_count': 1,
       'name': 'call_model',
       'output_count': 1,
-      'params_count': 4,
+      'params_count': 5,
     }),
     dict({
       'display_name': 'draw_image',

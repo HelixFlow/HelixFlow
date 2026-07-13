@@ -200,6 +200,90 @@ class FlowRunManager:
             raise ValueError(run.error)
         return run.result or {}
 
+    def _resolve_conversation_checkpointer(self, checkpointer_type: str):
+        """Checkpointer whose lifetime spans requests, so a reused thread_id
+        picks up its prior state (multi-turn memory).
+
+        ``memory`` maps to the manager's shared InMemorySaver (single-process
+        lifetime); ``sqlite`` maps to the durable process-wide saver.
+        """
+        if checkpointer_type in (None, "", "memory"):
+            return self._checkpointer
+        from core.frontend.graph import _CHECKPOINTER_FACTORY
+        if checkpointer_type not in _CHECKPOINTER_FACTORY:
+            raise ValueError(f"checkpointer_type={checkpointer_type!r} not supported")
+        return _CHECKPOINTER_FACTORY[checkpointer_type]()
+
+    def _prepare_sync_invocation(self, graph_data: Dict[str, Any], inputs: Optional[Dict[str, Any]],
+                                 thread_id: Optional[str], checkpointer_type: str,
+                                 recursion_limit: Optional[int]):
+        graph = FrontendGraph.from_payload(graph_data)
+        checkpointer = self._resolve_conversation_checkpointer(checkpointer_type)
+        state_graph = graph.compile_graph(checkpointer=checkpointer)
+        config = copy.deepcopy(graph.config)
+        config["configurable"]["thread_id"] = str(thread_id) if thread_id else str(uuid4())
+        if recursion_limit:
+            config["recursion_limit"] = max(1, int(recursion_limit))
+        state = copy.deepcopy(graph.state)
+        state = parse_input_to_state(inputs or {}, state, start_node=graph.get_start_node())
+        return graph, state_graph, config, state
+
+    def run_sync(self, flow_id: str, graph_data: Dict[str, Any], inputs: Optional[Dict[str, Any]],
+                 thread_id: Optional[str] = None, checkpointer_type: str = "memory",
+                 recursion_limit: Optional[int] = None) -> Dict[str, Any]:
+        """Synchronous single-shot run without interrupt machinery.
+
+        Passing the same ``thread_id`` across calls continues the same
+        LangGraph thread: ``AppState.messages`` history is restored from the
+        checkpointer, giving conversational nodes multi-turn memory.
+        """
+        _, state_graph, config, state = self._prepare_sync_invocation(
+            graph_data, inputs, thread_id, checkpointer_type, recursion_limit)
+        logger.info(f"Processing flow {flow_id} synchronously on thread {config['configurable']['thread_id']}")
+        result = state_graph.invoke(input=state, config=config)
+        output = parse_end_node_to_output(result)
+        output["thread_id"] = config["configurable"]["thread_id"]
+        return output
+
+    @staticmethod
+    def _jsonable_fields(update: Dict[str, Any]) -> Dict[str, Any]:
+        fields = update.get("fields") if isinstance(update, dict) else None
+        if not isinstance(fields, dict):
+            return {}
+        summary = {}
+        for key, value in fields.items():
+            field_value = getattr(value, "field_value", value)
+            if isinstance(field_value, (str, int, float, bool)) or field_value is None:
+                summary[key] = field_value
+            else:
+                summary[key] = str(field_value)
+        return summary
+
+    def stream_sync(self, flow_id: str, graph_data: Dict[str, Any], inputs: Optional[Dict[str, Any]],
+                    thread_id: Optional[str] = None, checkpointer_type: str = "memory",
+                    recursion_limit: Optional[int] = None):
+        """Yield ``(event, data)`` tuples: start → node (per node update) → end.
+
+        The router wraps these into SSE frames. ``end`` carries the parsed
+        flow output; an ``error`` event replaces ``end`` on failure.
+        """
+        _, state_graph, config, state = self._prepare_sync_invocation(
+            graph_data, inputs, thread_id, checkpointer_type, recursion_limit)
+        thread = config["configurable"]["thread_id"]
+        yield "start", {"flow_id": str(flow_id), "thread_id": thread}
+        try:
+            for chunk in state_graph.stream(input=state, config=config, stream_mode="updates"):
+                for node_name, update in (chunk or {}).items():
+                    yield "node", {"node": node_name, "fields": self._jsonable_fields(update)}
+        except Exception as exc:
+            yield "error", {"message": str(exc)}
+            return
+        snapshot = state_graph.get_state(config)
+        values = snapshot.values if snapshot else None
+        output = parse_end_node_to_output(values) if values else {}
+        output["thread_id"] = thread
+        yield "end", output
+
     def _start_worker(self, run: FlowRun, graph_input: Any):
         with run.lock:
             if run.worker and run.worker.is_alive():
@@ -586,8 +670,11 @@ class FlowRunManager:
             return set()
 
         adjacency = {}
-        for source, target in (run.graph.edges or {}).items():
-            adjacency.setdefault(source, set()).add(target)
+        for source, targets in (run.graph.edges or {}).items():
+            # graph.edges 的 value 是目标列表（多目标边）；兼容旧的字符串形式
+            if isinstance(targets, str):
+                targets = [targets]
+            adjacency.setdefault(source, set()).update(targets)
         for source, conditions in (run.graph._condition_edges or {}).items():
             for condition in conditions:
                 target = condition.get("target")
